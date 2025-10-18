@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase RTDB Testing Tool</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts for a modern look -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .btn {
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+        }
+        .btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Main App Container -->
+    <div class="w-full max-w-2xl">
+        <div class="bg-gray-200 rounded-2xl p-6 md:p-8 w-full shadow-md">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-800 mb-4 text-center">RTDB Data Sender</h1>
+            
+            <!-- Buttons Container -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-6">
+                <button id="sendNormalBtn" class="btn bg-gradient-to-br from-indigo-500 to-blue-600 text-white font-bold py-4 px-4 rounded-xl text-lg flex flex-col items-center justify-center">
+                    <span>Start Sending</span>
+                    <span class="font-normal text-sm opacity-80">NORMAL Data</span>
+                </button>
+                <button id="sendAnomalyBtn" class="btn bg-gradient-to-br from-red-500 to-rose-600 text-white font-bold py-4 px-4 rounded-xl text-lg flex flex-col items-center justify-center">
+                    <span>Start Sending</span>
+                    <span class="font-normal text-sm opacity-80">ANOMALY Data</span>
+                </button>
+            </div>
+
+            <!-- Stop Button -->
+            <div class="mb-6">
+                 <button id="stopBtn" class="btn w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-4 rounded-xl text-lg" disabled>
+                    Stop Sending
+                </button>
+            </div>
+
+            <!-- Status Display -->
+            <div id="status" class="bg-white p-4 rounded-lg text-gray-700 min-h-[70px] flex items-center justify-center shadow-inner">
+                <p id="status-text" class="text-center">Initializing... Please wait.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Import functions from the Firebase SDKs
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
+        import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-database.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
+
+        // --- 1. FIREBASE CONFIGURATION ---
+        const firebaseConfigRTDB = {
+            apiKey: "AIzaSyCwOjCx_FHmZdlIiW_3rLYx93-rvTFgzC4",
+            databaseURL: "https://monitoring123-b4e41-default-rtdb.asia-southeast1.firebasedatabase.app/",
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfigRTDB, "rtdbApp");
+        const db = getDatabase(app);
+        const auth = getAuth(app);
+
+        // --- 2. DATA DEFINITIONS ---
+        // Helper function to add a small random variation
+        const randomize = (value, percent) => value + (value * (Math.random() - 0.5) * (percent / 100));
+
+        const getNormalData = () => ({
+            sensor_data: {
+                V1: randomize(20500, 2), V2: randomize(20450, 2), V3: randomize(20550, 2),
+                Vavg: randomize(20500, 2), Iavg: randomize(5.5, 10), Ptot: randomize(350, 10),
+                Edel: Date.now() / 100000 // A value that keeps increasing
+            },
+            pzem: {
+                Tegangan: randomize(220, 5), Daya: randomize(1500, 10),
+                Energi: randomize(25, 20), Frekuensi: randomize(50, 0.5)
+            },
+            Panel1: {
+                Voltage_Avg_L_N: randomize(225, 5), Frequency: randomize(50.1, 0.5)
+            }
+        });
+
+        const getAnomalyData = () => ({
+            sensor_data: {
+                V1: randomize(23500, 5), V2: randomize(18500, 5), V3: randomize(23600, 5),
+                Vavg: randomize(18400, 5), Iavg: randomize(15, 10), Ptot: randomize(1200, 10),
+                Edel: Date.now() / 100000
+            },
+            pzem: {
+                Tegangan: randomize(255, 5), Daya: randomize(2800, 10),
+                Energi: randomize(60, 20), Frekuensi: randomize(52.5, 1)
+            },
+            Panel1: {
+                Voltage_Avg_L_N: randomize(185, 5), Frequency: randomize(48.5, 1)
+            }
+        });
+
+        // --- 3. APP LOGIC ---
+        const sendNormalBtn = document.getElementById('sendNormalBtn');
+        const sendAnomalyBtn = document.getElementById('sendAnomalyBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusText = document.getElementById('status-text');
+
+        let intervalId = null; // To store the timer
+
+        const updateStatus = (message, isSending = false) => {
+            statusText.innerHTML = message; // Use innerHTML to allow for bold text
+            stopBtn.disabled = !isSending;
+            sendNormalBtn.disabled = isSending;
+            sendAnomalyBtn.disabled = isSending;
+        };
+
+        const sendData = async (dataType) => {
+            const dataToSend = dataType === 'normal' ? getNormalData() : getAnomalyData();
+            
+            try {
+                await Promise.all([
+                    set(ref(db, 'sensor_data'), dataToSend.sensor_data),
+                    set(ref(db, 'pzem'), dataToSend.pzem),
+                    set(ref(db, 'Panel1'), dataToSend.Panel1)
+                ]);
+                const timestamp = new Date().toLocaleTimeString();
+                updateStatus(`Successfully sent <strong>${dataType.toUpperCase()}</strong> data at ${timestamp}.<br>Next update in 60s.`, true);
+            } catch (error) {
+                console.error("Failed to send data:", error);
+                updateStatus(`<strong>Error:</strong> ${error.message}.<br>Check console and DB rules.`, true);
+            }
+        };
+
+        const startSending = (dataType) => {
+            if (intervalId) clearInterval(intervalId);
+            
+            updateStatus(`Starting to send <strong>${dataType.toUpperCase()}</strong> data...`, true);
+            sendData(dataType); 
+            
+            intervalId = setInterval(() => sendData(dataType), 60000);
+        };
+
+        const stopSending = () => {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+                updateStatus('Sending stopped by user. Ready to start again.', false);
+            }
+        };
+        
+        // --- 4. AUTHENTICATION & EVENT LISTENERS ---
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                updateStatus("Logged in. Ready to send data.", false);
+                sendNormalBtn.addEventListener('click', () => startSending('normal'));
+                sendAnomalyBtn.addEventListener('click', () => startSending('anomaly'));
+                stopBtn.addEventListener('click', stopSending);
+            } else {
+                updateStatus("Attempting anonymous login...", false);
+                signInAnonymously(auth).catch(error => {
+                    console.error("Anonymous login failed:", error);
+                    updateStatus(`<strong>Login Failed:</strong> ${error.message}`, false);
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+
